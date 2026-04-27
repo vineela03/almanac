@@ -51,7 +51,7 @@ Scroll down, click **Commit changes**.
 2. In the left sidebar, click **Pages**
 3. Under **Source**, choose **Deploy from a branch**
 4. Under **Branch**, select **main** and **/ (root)**, then click **Save**
-5. Wait about 1–2 minutes. Refresh the Pages settings page until you see a green box at the top: **"Your site is live at https://YOUR-USERNAME.github.io/almanac/"**
+5. Wait about 1–2 minutes. Refresh the Pages settings page until you see a green box at the top
 
 That URL is your app. Bookmark it — it's permanent and free.
 
