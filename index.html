@@ -84,6 +84,10 @@
       x: <path d="M18 6 6 18M6 6l12 12" />,
       alert: <g><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></g>,
       share: <g><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" /><polyline points="16 6 12 2 8 6" /><line x1="12" y1="2" x2="12" y2="15" /></g>,
+      settings: <g><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" /></g>,
+      sync: <g><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></g>,
+      cloud: <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />,
+      cloudOff: <g><path d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3" /><line x1="1" y1="1" x2="23" y2="23" /></g>,
     };
 
     const Icon = ({ name, size = 14, className = "", ...props }) => (
@@ -97,6 +101,9 @@
     const STORAGE_KEY = "almanac_tasks_v1";
     const LASTSEEN_KEY = "almanac_lastseen";
     const INSTALL_DISMISSED_KEY = "almanac_install_dismissed";
+    const GIST_TOKEN_KEY = "almanac_gist_token";
+    const GIST_ID_KEY = "almanac_gist_id";
+    const GIST_LASTSYNC_KEY = "almanac_gist_lastsync";
 
     const loadTasks = () => {
       try { const v = localStorage.getItem(STORAGE_KEY); return v ? JSON.parse(v) : []; }
@@ -107,6 +114,80 @@
     };
     const loadLastSeen = () => { try { return localStorage.getItem(LASTSEEN_KEY) || null; } catch { return null; } };
     const saveLastSeen = () => { try { localStorage.setItem(LASTSEEN_KEY, new Date().toISOString()); } catch {} };
+
+    // ---------- GitHub Gist Sync ----------
+    // Stores tasks in a private gist. Last-write-wins. Polls every 30s while app is open.
+    const GIST_FILENAME = "almanac-tasks.json";
+    const GIST_DESCRIPTION = "The Almanac — personal task data (private)";
+
+    const Gist = {
+      getToken: () => { try { return localStorage.getItem(GIST_TOKEN_KEY) || null; } catch { return null; } },
+      setToken: (t) => { try { if (t) localStorage.setItem(GIST_TOKEN_KEY, t); else localStorage.removeItem(GIST_TOKEN_KEY); } catch {} },
+      getId: () => { try { return localStorage.getItem(GIST_ID_KEY) || null; } catch { return null; } },
+      setId: (id) => { try { if (id) localStorage.setItem(GIST_ID_KEY, id); else localStorage.removeItem(GIST_ID_KEY); } catch {} },
+
+      // Find an existing almanac gist for this user, or create one.
+      // Returns gist id or throws on error.
+      findOrCreate: async (token) => {
+        // List user's gists and look for ours by description
+        const r = await fetch("https://api.github.com/gists?per_page=100", {
+          headers: { "Authorization": `Bearer ${token}`, "Accept": "application/vnd.github+json" },
+        });
+        if (!r.ok) throw new Error(`GitHub auth failed (${r.status})`);
+        const gists = await r.json();
+        const existing = gists.find((g) => g.description === GIST_DESCRIPTION && g.files && g.files[GIST_FILENAME]);
+        if (existing) return existing.id;
+
+        // Create a new private gist
+        const cr = await fetch("https://api.github.com/gists", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${token}`, "Accept": "application/vnd.github+json", "Content-Type": "application/json" },
+          body: JSON.stringify({
+            description: GIST_DESCRIPTION,
+            public: false,
+            files: { [GIST_FILENAME]: { content: JSON.stringify({ tasks: [], updatedAt: nowISO() }, null, 2) } },
+          }),
+        });
+        if (!cr.ok) throw new Error(`Couldn't create gist (${cr.status})`);
+        const created = await cr.json();
+        return created.id;
+      },
+
+      // Fetch the latest payload { tasks, updatedAt } from the gist
+      fetch: async (token, gistId) => {
+        const r = await fetch(`https://api.github.com/gists/${gistId}`, {
+          headers: { "Authorization": `Bearer ${token}`, "Accept": "application/vnd.github+json" },
+        });
+        if (!r.ok) throw new Error(`Fetch failed (${r.status})`);
+        const data = await r.json();
+        const file = data.files && data.files[GIST_FILENAME];
+        if (!file) return { tasks: [], updatedAt: null };
+        // For large files GitHub returns truncated=true; fetch raw_url instead
+        let content = file.content;
+        if (file.truncated && file.raw_url) {
+          const raw = await fetch(file.raw_url);
+          content = await raw.text();
+        }
+        try {
+          const parsed = JSON.parse(content);
+          return { tasks: parsed.tasks || [], updatedAt: parsed.updatedAt || null };
+        } catch {
+          return { tasks: [], updatedAt: null };
+        }
+      },
+
+      // Push tasks to the gist
+      push: async (token, gistId, tasks) => {
+        const payload = { tasks, updatedAt: nowISO() };
+        const r = await fetch(`https://api.github.com/gists/${gistId}`, {
+          method: "PATCH",
+          headers: { "Authorization": `Bearer ${token}`, "Accept": "application/vnd.github+json", "Content-Type": "application/json" },
+          body: JSON.stringify({ files: { [GIST_FILENAME]: { content: JSON.stringify(payload, null, 2) } } }),
+        });
+        if (!r.ok) throw new Error(`Push failed (${r.status})`);
+        return payload.updatedAt;
+      },
+    };
 
     // ---------- iOS detection ----------
     const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
@@ -159,7 +240,15 @@
       const [tick, setTick] = useState(0);
       const [missedReminders, setMissedReminders] = useState([]);
       const [showIOSInstall, setShowIOSInstall] = useState(false);
+      const [showSettings, setShowSettings] = useState(false);
+      // Sync state: 'off' | 'idle' | 'syncing' | 'error'
+      const [syncStatus, setSyncStatus] = useState(Gist.getToken() ? "idle" : "off");
+      const [syncError, setSyncError] = useState(null);
+      const [lastSyncAt, setLastSyncAt] = useState(null);
       const firedRef = useRef(new Set());
+      const pushTimerRef = useRef(null);
+      const lastPushedRef = useRef(null); // JSON string of last pushed tasks (avoid loops)
+      const lastRemoteUpdatedRef = useRef(null); // updatedAt from server
 
       // First load
       useEffect(() => {
@@ -198,8 +287,144 @@
         };
       }, []);
 
-      // Persist tasks
+      // Persist tasks locally always (cache)
       useEffect(() => { if (loaded) saveTasks(tasks); }, [tasks, loaded]);
+
+      // ---------- Sync: initial fetch from gist on load ----------
+      useEffect(() => {
+        if (!loaded) return;
+        const token = Gist.getToken();
+        if (!token) return;
+
+        let cancelled = false;
+        (async () => {
+          try {
+            setSyncStatus("syncing");
+            let gistId = Gist.getId();
+            if (!gistId) {
+              gistId = await Gist.findOrCreate(token);
+              Gist.setId(gistId);
+            }
+            const remote = await Gist.fetch(token, gistId);
+            if (cancelled) return;
+
+            // Merge logic: if remote has tasks and we have local-only tasks (first sync from new device),
+            // prefer remote (the user clicked sync on this new device, expecting the existing tasks to load)
+            // unless remote is empty in which case push our local tasks up.
+            const localTasks = loadTasks();
+            if (remote.tasks.length > 0) {
+              setTasks(remote.tasks);
+              lastPushedRef.current = JSON.stringify(remote.tasks);
+              lastRemoteUpdatedRef.current = remote.updatedAt;
+            } else if (localTasks.length > 0) {
+              // Remote is empty, we have local — push up
+              const updatedAt = await Gist.push(token, gistId, localTasks);
+              lastPushedRef.current = JSON.stringify(localTasks);
+              lastRemoteUpdatedRef.current = updatedAt;
+            }
+            setSyncStatus("idle");
+            setLastSyncAt(new Date());
+            setSyncError(null);
+          } catch (e) {
+            if (cancelled) return;
+            console.error("Initial sync failed:", e);
+            setSyncStatus("error");
+            setSyncError(e.message || "Sync failed");
+          }
+        })();
+        return () => { cancelled = true; };
+      }, [loaded]);
+
+      // ---------- Sync: debounced push when tasks change ----------
+      useEffect(() => {
+        if (!loaded) return;
+        const token = Gist.getToken();
+        const gistId = Gist.getId();
+        if (!token || !gistId) return;
+
+        const serialized = JSON.stringify(tasks);
+        if (serialized === lastPushedRef.current) return; // nothing changed since last push
+
+        if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
+        pushTimerRef.current = setTimeout(async () => {
+          try {
+            setSyncStatus("syncing");
+            const updatedAt = await Gist.push(token, gistId, tasks);
+            lastPushedRef.current = serialized;
+            lastRemoteUpdatedRef.current = updatedAt;
+            setSyncStatus("idle");
+            setLastSyncAt(new Date());
+            setSyncError(null);
+          } catch (e) {
+            console.error("Push failed:", e);
+            setSyncStatus("error");
+            setSyncError(e.message || "Sync failed");
+          }
+        }, 1500); // debounce 1.5s
+
+        return () => { if (pushTimerRef.current) clearTimeout(pushTimerRef.current); };
+      }, [tasks, loaded]);
+
+      // ---------- Sync: poll every 30s for remote changes ----------
+      useEffect(() => {
+        if (!loaded) return;
+        const token = Gist.getToken();
+        if (!token) return;
+
+        const poll = async () => {
+          // Skip polling while a push is pending
+          if (pushTimerRef.current) return;
+          if (document.hidden) return; // don't poll while tab is hidden
+          try {
+            const gistId = Gist.getId();
+            if (!gistId) return;
+            const remote = await Gist.fetch(token, gistId);
+            if (remote.updatedAt && remote.updatedAt !== lastRemoteUpdatedRef.current) {
+              const remoteSerialized = JSON.stringify(remote.tasks);
+              if (remoteSerialized !== JSON.stringify(tasks)) {
+                setTasks(remote.tasks);
+                lastPushedRef.current = remoteSerialized;
+                setLastSyncAt(new Date());
+              }
+              lastRemoteUpdatedRef.current = remote.updatedAt;
+            }
+          } catch (e) {
+            // Silent failure on poll — already-known state takes over
+            console.warn("Poll failed:", e);
+          }
+        };
+
+        const interval = setInterval(poll, 30000);
+        // Also poll when tab becomes visible
+        const onVis = () => { if (!document.hidden) poll(); };
+        document.addEventListener("visibilitychange", onVis);
+        return () => {
+          clearInterval(interval);
+          document.removeEventListener("visibilitychange", onVis);
+        };
+      }, [loaded, tasks]);
+
+      // Manual sync trigger
+      const triggerSync = async () => {
+        const token = Gist.getToken();
+        if (!token) { setShowSettings(true); return; }
+        try {
+          setSyncStatus("syncing");
+          let gistId = Gist.getId();
+          if (!gistId) { gistId = await Gist.findOrCreate(token); Gist.setId(gistId); }
+          const remote = await Gist.fetch(token, gistId);
+          // Pull remote
+          setTasks(remote.tasks);
+          lastPushedRef.current = JSON.stringify(remote.tasks);
+          lastRemoteUpdatedRef.current = remote.updatedAt;
+          setSyncStatus("idle");
+          setLastSyncAt(new Date());
+          setSyncError(null);
+        } catch (e) {
+          setSyncStatus("error");
+          setSyncError(e.message || "Sync failed");
+        }
+      };
 
       // Tick + reminder firing
       useEffect(() => {
@@ -378,10 +603,25 @@
             )}
 
             {/* Header */}
-            <header className="border-b border-stone-800/20 pb-6 mb-8">
-              <p className="mono uppercase text-[10px] tracking-[0.25em] text-stone-700/70 mb-2">{dateLine}</p>
-              <h1 className="display text-5xl sm:text-6xl leading-[0.95] italic">The Almanac</h1>
-              <p className="display text-xl mt-1 text-stone-700/80"><span className="not-italic">— a record of your days</span></p>
+            <header className="border-b border-stone-800/20 pb-6 mb-8 relative">
+              <div className="flex items-start justify-between">
+                <div className="flex-1 min-w-0">
+                  <p className="mono uppercase text-[10px] tracking-[0.25em] text-stone-700/70 mb-2">{dateLine}</p>
+                  <h1 className="display text-5xl sm:text-6xl leading-[0.95] italic">The Almanac</h1>
+                  <p className="display text-xl mt-1 text-stone-700/80"><span className="not-italic">— a record of your days</span></p>
+                </div>
+                <div className="flex items-center gap-3 flex-shrink-0 mt-2">
+                  <SyncIndicator status={syncStatus} lastSyncAt={lastSyncAt} onClick={triggerSync} hasToken={!!Gist.getToken()} />
+                  <button
+                    onClick={() => setShowSettings(true)}
+                    className="p-2 text-stone-700/70 hover:text-stone-900 transition-colors"
+                    title="Settings"
+                    aria-label="Settings"
+                  >
+                    <Icon name="settings" size={16} />
+                  </button>
+                </div>
+              </div>
               {notifPermission !== "granted" && isInStandaloneMode() && (
                 <button
                   onClick={requestNotifPermission}
@@ -451,6 +691,21 @@
               onSave={(t) => { upsertTask(t); setEditing(null); }}
               onClose={() => setEditing(null)}
               onDelete={(id) => { removeTask(id); setEditing(null); }}
+            />
+          )}
+
+          {showSettings && (
+            <SettingsModal
+              onClose={() => setShowSettings(false)}
+              syncStatus={syncStatus}
+              syncError={syncError}
+              setSyncStatus={setSyncStatus}
+              setSyncError={setSyncError}
+              setLastSyncAt={setLastSyncAt}
+              tasks={tasks}
+              setTasks={setTasks}
+              lastPushedRef={lastPushedRef}
+              lastRemoteUpdatedRef={lastRemoteUpdatedRef}
             />
           )}
         </div>
@@ -721,6 +976,191 @@
                   <button onClick={save} disabled={!draft.title.trim()}
                     className="mono uppercase text-[10px] tracking-[0.25em] px-4 py-2 bg-[#1A1612] text-[#F4EEE2] disabled:opacity-30">
                     Save entry
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function SyncIndicator({ status, lastSyncAt, onClick, hasToken }) {
+      if (!hasToken) {
+        return (
+          <button
+            onClick={onClick}
+            className="mono uppercase text-[9px] tracking-[0.2em] text-stone-700/60 hover:text-stone-900 flex items-center gap-1 transition-colors"
+            title="Sync is off — tap to set up"
+          >
+            <Icon name="cloudOff" size={12} /> <span className="hidden sm:inline">Off</span>
+          </button>
+        );
+      }
+      const config = {
+        idle: { icon: "cloud", color: "text-stone-700/60", label: "Synced" },
+        syncing: { icon: "sync", color: "text-[#C84B31] animate-spin", label: "Syncing" },
+        error: { icon: "cloudOff", color: "text-[#C84B31]", label: "Sync error" },
+        off: { icon: "cloudOff", color: "text-stone-700/60", label: "Off" },
+      }[status] || { icon: "cloud", color: "text-stone-700/60", label: "" };
+
+      const lastSyncLabel = lastSyncAt
+        ? lastSyncAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+        : "";
+
+      return (
+        <button
+          onClick={onClick}
+          className={`mono uppercase text-[9px] tracking-[0.2em] flex items-center gap-1 transition-colors ${config.color}`}
+          title={`${config.label}${lastSyncLabel ? ` · last ${lastSyncLabel}` : ""} · tap to refresh`}
+        >
+          <Icon name={config.icon} size={12} className={status === "syncing" ? "animate-spin" : ""} />
+          <span className="hidden sm:inline">{config.label}</span>
+        </button>
+      );
+    }
+
+    function SettingsModal({ onClose, syncStatus, syncError, setSyncStatus, setSyncError, setLastSyncAt, tasks, setTasks, lastPushedRef, lastRemoteUpdatedRef }) {
+      const [token, setToken] = useState(Gist.getToken() || "");
+      const [working, setWorking] = useState(false);
+      const [message, setMessage] = useState(null);
+      const hasExistingToken = !!Gist.getToken();
+
+      const connect = async () => {
+        const trimmed = token.trim();
+        if (!trimmed) { setMessage({ type: "error", text: "Please paste a token first." }); return; }
+        setWorking(true);
+        setMessage(null);
+        try {
+          // Validate token by trying to find or create a gist
+          const gistId = await Gist.findOrCreate(trimmed);
+          Gist.setToken(trimmed);
+          Gist.setId(gistId);
+
+          // Pull existing remote tasks (in case this is a 2nd device)
+          const remote = await Gist.fetch(trimmed, gistId);
+          if (remote.tasks.length > 0) {
+            setTasks(remote.tasks);
+            lastPushedRef.current = JSON.stringify(remote.tasks);
+          } else if (tasks.length > 0) {
+            // Push our local tasks up to remote
+            const updatedAt = await Gist.push(trimmed, gistId, tasks);
+            lastPushedRef.current = JSON.stringify(tasks);
+            lastRemoteUpdatedRef.current = updatedAt;
+          }
+          lastRemoteUpdatedRef.current = remote.updatedAt;
+          setSyncStatus("idle");
+          setLastSyncAt(new Date());
+          setSyncError(null);
+          setMessage({ type: "success", text: "Connected — your tasks will now sync." });
+          setTimeout(onClose, 1200);
+        } catch (e) {
+          setMessage({ type: "error", text: e.message || "Connection failed. Check the token has 'gist' scope." });
+          setSyncStatus("error");
+        } finally {
+          setWorking(false);
+        }
+      };
+
+      const disconnect = () => {
+        if (!confirm("Disconnect sync? Your tasks will stay on this device but won't sync anymore.")) return;
+        Gist.setToken(null);
+        Gist.setId(null);
+        setSyncStatus("off");
+        setSyncError(null);
+        setToken("");
+        setMessage({ type: "success", text: "Disconnected." });
+        setTimeout(onClose, 800);
+      };
+
+      return (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4"
+             style={{ background: "rgba(26,22,18,0.4)" }} onClick={onClose}>
+          <div className="w-full max-w-lg p-6 sm:p-8 relative max-h-[90vh] overflow-y-auto"
+               style={{ background: "#F4EEE2", boxShadow: "0 -10px 40px rgba(26,22,18,0.4)" }}
+               onClick={(e) => e.stopPropagation()}>
+            <div className="grain absolute inset-0 pointer-events-none opacity-50" />
+            <div className="relative">
+              <div className="flex items-start justify-between mb-6">
+                <div>
+                  <p className="mono uppercase text-[10px] tracking-[0.25em] text-stone-700/60 mb-1">Settings</p>
+                  <h2 className="display italic text-3xl">Sync between devices.</h2>
+                </div>
+                <button onClick={onClose} className="text-stone-700 -mr-2 -mt-1 p-1"><Icon name="x" size={20} /></button>
+              </div>
+
+              <div className="space-y-5">
+                <div>
+                  <p className="mono uppercase text-[10px] tracking-[0.2em] text-stone-700/70 mb-2">How it works</p>
+                  <p className="text-sm leading-relaxed text-stone-800">
+                    Your tasks save to a private GitHub Gist that only you can see. Any device with the same token shares the same task list.
+                  </p>
+                </div>
+
+                {!hasExistingToken && (
+                  <div className="border-l-2 border-stone-800/30 pl-4 py-1">
+                    <p className="mono uppercase text-[10px] tracking-[0.2em] text-stone-700/70 mb-2">One-time setup</p>
+                    <ol className="text-sm leading-relaxed text-stone-800 space-y-1.5 list-decimal list-inside">
+                      <li>
+                        <a href="https://github.com/settings/tokens/new?description=Almanac%20Sync&scopes=gist" target="_blank" rel="noopener noreferrer"
+                           className="text-[#C84B31] underline">
+                          Click here to create a token →
+                        </a>
+                      </li>
+                      <li>Set <span className="mono text-xs">Expiration</span> to "No expiration" (or 1 year)</li>
+                      <li>Confirm <span className="mono text-xs">gist</span> is checked under Scopes</li>
+                      <li>Click <span className="font-semibold">Generate token</span> at the bottom</li>
+                      <li>Copy the token (starts with <span className="mono text-xs">ghp_</span>) and paste below</li>
+                    </ol>
+                  </div>
+                )}
+
+                <div>
+                  <label className="mono uppercase text-[10px] tracking-[0.2em] text-stone-700/70 block mb-1.5">
+                    GitHub Personal Access Token
+                  </label>
+                  <input
+                    type="password"
+                    value={token}
+                    onChange={(e) => setToken(e.target.value)}
+                    placeholder="ghp_..."
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck="false"
+                    className="w-full bg-transparent border-b border-stone-800/30 pb-1 outline-none focus:border-[#C84B31] text-sm mono"
+                  />
+                  <p className="mono text-[10px] text-stone-700/50 mt-2 leading-relaxed">
+                    Stored only in this browser's local storage. Never sent anywhere except GitHub's API.
+                  </p>
+                </div>
+
+                {message && (
+                  <div className={`text-sm py-2 px-3 border-l-2 ${message.type === "error" ? "border-[#C84B31] bg-[#C84B31]/5 text-[#C84B31]" : "border-emerald-700 bg-emerald-700/5 text-emerald-800"}`}>
+                    {message.text}
+                  </div>
+                )}
+
+                {hasExistingToken && syncError && (
+                  <div className="text-sm py-2 px-3 border-l-2 border-[#C84B31] bg-[#C84B31]/5 text-[#C84B31]">
+                    Last sync error: {syncError}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between mt-7 pt-5 border-t border-stone-800/15 flex-wrap gap-3">
+                {hasExistingToken ? (
+                  <button onClick={disconnect}
+                    className="mono uppercase text-[10px] tracking-[0.25em] text-stone-700 hover:text-[#C84B31] flex items-center gap-1">
+                    Disconnect
+                  </button>
+                ) : <span />}
+                <div className="flex gap-3">
+                  <button onClick={onClose} className="mono uppercase text-[10px] tracking-[0.25em] text-stone-700">Cancel</button>
+                  <button onClick={connect} disabled={!token.trim() || working}
+                    className="mono uppercase text-[10px] tracking-[0.25em] px-4 py-2 bg-[#1A1612] text-[#F4EEE2] disabled:opacity-30 flex items-center gap-2">
+                    {working && <Icon name="sync" size={11} className="animate-spin" />}
+                    {hasExistingToken ? "Reconnect" : "Connect"}
                   </button>
                 </div>
               </div>
