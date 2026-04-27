@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>The Almanac</title>
+  <meta name="description" content="A personal task almanac." />
+
+  <!-- PWA basics -->
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#F4EEE2" />
+
+  <!-- iOS-specific PWA tags -->
+  <link rel="apple-touch-icon" href="icon-180.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Almanac" />
+  <meta name="format-detection" content="telephone=no" />
+
+  <!-- Favicon for browser tab -->
+  <link rel="icon" type="image/png" href="icon-180.png" />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..900,0..100&family=DM+Sans:opsz,wght@9..40,400..700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <!-- Tailwind + React via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    html, body {
+      margin: 0;
+      background: #F4EEE2;
+      /* iOS safe-area handling for notch and home indicator */
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+      padding-left: env(safe-area-inset-left);
+      padding-right: env(safe-area-inset-right);
+      -webkit-tap-highlight-color: transparent;
+      -webkit-text-size-adjust: 100%;
+    }
+    body { overscroll-behavior-y: none; }
+    .almanac { font-family: 'DM Sans', system-ui, sans-serif; }
+    .display { font-family: 'Fraunces', Georgia, serif; font-variation-settings: "SOFT" 30, "opsz" 144; letter-spacing: -0.02em; }
+    .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+    .grain { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.06 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>"); }
+    @keyframes drawCheck { from { stroke-dashoffset: 24; } to { stroke-dashoffset: 0; } }
+    .check-anim { stroke-dasharray: 24; animation: drawCheck 0.4s ease-out forwards; }
+    .pulse-dot { animation: pulse 1.6s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+    @keyframes slideDown { from { transform: translateY(-10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    .slide-down { animation: slideDown 0.4s ease-out; }
+    /* Larger tap targets on iPhone */
+    button, input, select, textarea { font-size: 16px; }  /* prevents iOS auto-zoom on focus */
+    .loading { font-family: 'Fraunces', Georgia, serif; font-style: italic; color: #1A1612; }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;">
+      <p class="loading" style="font-size:1.5rem;opacity:0.5;">Opening the almanac…</p>
+    </div>
+  </div>
+
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useRef } = React;
+
+    // ---------- Inline SVG icons ----------
+    const ICON_PATHS = {
+      plus: <path d="M12 5v14M5 12h14" />,
+      check: <path d="M20 6 9 17l-5-5" />,
+      play: <polygon points="6 3 20 12 6 21 6 3" />,
+      pause: <g><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></g>,
+      bell: <g><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" /></g>,
+      bellOff: <g><path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5" /><path d="M17 17H3s3-2 3-9" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" /><line x1="2" y1="2" x2="22" y2="22" /></g>,
+      trash: <g><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /></g>,
+      calendar: <g><rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></g>,
+      clock: <g><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></g>,
+      edit: <g><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" /></g>,
+      x: <path d="M18 6 6 18M6 6l12 12" />,
+      alert: <g><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></g>,
+      share: <g><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" /><polyline points="16 6 12 2 8 6" /><line x1="12" y1="2" x2="12" y2="15" /></g>,
+    };
+
+    const Icon = ({ name, size = 14, className = "", ...props }) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} {...props}>
+        {ICON_PATHS[name]}
+      </svg>
+    );
+
+    // ---------- Storage ----------
+    const STORAGE_KEY = "almanac_tasks_v1";
+    const LASTSEEN_KEY = "almanac_lastseen";
+    const INSTALL_DISMISSED_KEY = "almanac_install_dismissed";
+
+    const loadTasks = () => {
+      try { const v = localStorage.getItem(STORAGE_KEY); return v ? JSON.parse(v) : []; }
+      catch { return []; }
+    };
+    const saveTasks = (tasks) => {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks)); } catch (e) { console.error(e); }
+    };
+    const loadLastSeen = () => { try { return localStorage.getItem(LASTSEEN_KEY) || null; } catch { return null; } };
+    const saveLastSeen = () => { try { localStorage.setItem(LASTSEEN_KEY, new Date().toISOString()); } catch {} };
+
+    // ---------- iOS detection ----------
+    const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    const isInStandaloneMode = () =>
+      window.matchMedia('(display-mode: standalone)').matches ||
+      window.navigator.standalone === true;
+
+    // ---------- Helpers ----------
+    const uid = () => Math.random().toString(36).slice(2, 11);
+    const nowISO = () => new Date().toISOString();
+
+    const fmtDateTime = (iso) => {
+      if (!iso) return "—";
+      const d = new Date(iso);
+      const today = new Date();
+      const tomorrow = new Date();
+      tomorrow.setDate(today.getDate() + 1);
+      const sameDay = (a, b) => a.toDateString() === b.toDateString();
+      const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      if (sameDay(d, today)) return `Today · ${time}`;
+      if (sameDay(d, tomorrow)) return `Tomorrow · ${time}`;
+      return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} · ${time}`;
+    };
+
+    const fmtDuration = (mins) => {
+      if (!mins || mins < 1) return "0m";
+      const h = Math.floor(mins / 60);
+      const m = Math.floor(mins % 60);
+      if (h && m) return `${h}h ${m}m`;
+      if (h) return `${h}h`;
+      return `${m}m`;
+    };
+
+    const isOverdue = (t) => t.dueDate && t.status !== "done" && new Date(t.dueDate) < new Date();
+    const isToday = (iso) => {
+      if (!iso) return false;
+      const d = new Date(iso); const t = new Date();
+      return d.toDateString() === t.toDateString();
+    };
+
+    // ---------- App ----------
+    function App() {
+      const [tasks, setTasks] = useState([]);
+      const [loaded, setLoaded] = useState(false);
+      const [filter, setFilter] = useState("today");
+      const [editing, setEditing] = useState(null);
+      const [notifPermission, setNotifPermission] = useState(
+        typeof Notification !== "undefined" ? Notification.permission : "default"
+      );
+      const [tick, setTick] = useState(0);
+      const [missedReminders, setMissedReminders] = useState([]);
+      const [showIOSInstall, setShowIOSInstall] = useState(false);
+      const firedRef = useRef(new Set());
+
+      // First load
+      useEffect(() => {
+        const t = loadTasks();
+        setTasks(t);
+        setLoaded(true);
+
+        // Compute missed reminders
+        const lastSeen = loadLastSeen();
+        if (lastSeen) {
+          const lastSeenDate = new Date(lastSeen);
+          const now = new Date();
+          const missed = t.filter((task) => {
+            if (task.status === "done" || !task.reminderSet || !task.dueDate || task.remindMinutesBefore == null) return false;
+            const triggerAt = new Date(task.dueDate).getTime() - task.remindMinutesBefore * 60000;
+            return triggerAt >= lastSeenDate.getTime() && triggerAt <= now.getTime();
+          });
+          setMissedReminders(missed);
+        }
+        saveLastSeen();
+
+        // Show iOS install hint if on iPhone in Safari (not yet installed) and not dismissed
+        if (isIOS() && !isInStandaloneMode() && !localStorage.getItem(INSTALL_DISMISSED_KEY)) {
+          setShowIOSInstall(true);
+        }
+
+        // Persist lastSeen periodically and when tab hides
+        const seenInterval = setInterval(saveLastSeen, 30000);
+        const onHide = () => saveLastSeen();
+        document.addEventListener("visibilitychange", onHide);
+        window.addEventListener("pagehide", onHide);
+        return () => {
+          clearInterval(seenInterval);
+          document.removeEventListener("visibilitychange", onHide);
+          window.removeEventListener("pagehide", onHide);
+        };
+      }, []);
+
+      // Persist tasks
+      useEffect(() => { if (loaded) saveTasks(tasks); }, [tasks, loaded]);
+
+      // Tick + reminder firing
+      useEffect(() => {
+        const i = setInterval(() => {
+          setTick((x) => x + 1);
+          const now = Date.now();
+          tasks.forEach((t) => {
+            if (
+              t.reminderSet && t.dueDate && t.remindMinutesBefore != null &&
+              t.status !== "done" && !firedRef.current.has(t.id)
+            ) {
+              const triggerAt = new Date(t.dueDate).getTime() - t.remindMinutesBefore * 60000;
+              if (now >= triggerAt && now <= triggerAt + 60000) {
+                firedRef.current.add(t.id);
+                if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+                  try {
+                    new Notification("Task reminder", {
+                      body: `${t.title} — due ${fmtDateTime(t.dueDate)}`,
+                      tag: t.id,
+                      icon: "icon-180.png",
+                    });
+                  } catch {}
+                }
+                try {
+                  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                  const o = ctx.createOscillator();
+                  const g = ctx.createGain();
+                  o.connect(g); g.connect(ctx.destination);
+                  o.frequency.value = 660;
+                  g.gain.setValueAtTime(0.0001, ctx.currentTime);
+                  g.gain.exponentialRampToValueAtTime(0.15, ctx.currentTime + 0.05);
+                  g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.6);
+                  o.start(); o.stop(ctx.currentTime + 0.6);
+                } catch {}
+              }
+            }
+          });
+        }, 1000);
+        return () => clearInterval(i);
+      }, [tasks]);
+
+      // ---------- Ops ----------
+      const upsertTask = (t) => setTasks((prev) => {
+        const i = prev.findIndex((x) => x.id === t.id);
+        if (i === -1) return [t, ...prev];
+        const next = [...prev]; next[i] = t; return next;
+      });
+      const removeTask = (id) => setTasks((prev) => prev.filter((t) => t.id !== id));
+
+      const toggleStatus = (t, target) => {
+        let next = { ...t };
+        if (target === "doing" && t.status !== "doing") {
+          next.status = "doing"; next.startedAt = nowISO();
+        } else if (target === "todo" && t.status === "doing") {
+          const elapsed = (Date.now() - new Date(t.startedAt).getTime()) / 60000;
+          next.actualMinutes = (t.actualMinutes || 0) + elapsed;
+          next.status = "todo"; next.startedAt = null;
+        } else if (target === "done") {
+          if (t.status === "doing" && t.startedAt) {
+            const elapsed = (Date.now() - new Date(t.startedAt).getTime()) / 60000;
+            next.actualMinutes = (t.actualMinutes || 0) + elapsed;
+          }
+          next.status = "done"; next.completedAt = nowISO(); next.startedAt = null;
+        } else if (target === "todo" && t.status === "done") {
+          next.status = "todo"; next.completedAt = null;
+        }
+        upsertTask(next);
+      };
+
+      const requestNotifPermission = async () => {
+        if (typeof Notification === "undefined") return;
+        try {
+          const p = await Notification.requestPermission();
+          setNotifPermission(p);
+        } catch {}
+      };
+
+      // ---------- Filtering ----------
+      const filtered = tasks
+        .filter((t) => {
+          if (filter === "today") return t.status !== "done" && (isToday(t.dueDate) || isOverdue(t));
+          if (filter === "upcoming") return t.status !== "done" && t.dueDate && new Date(t.dueDate) > new Date();
+          if (filter === "overdue") return isOverdue(t);
+          if (filter === "done") return t.status === "done";
+          return true;
+        })
+        .sort((a, b) => {
+          if (a.status === "doing" && b.status !== "doing") return -1;
+          if (b.status === "doing" && a.status !== "doing") return 1;
+          if (a.dueDate && b.dueDate) return new Date(a.dueDate) - new Date(b.dueDate);
+          if (a.dueDate) return -1;
+          if (b.dueDate) return 1;
+          return 0;
+        });
+
+      // ---------- Stats ----------
+      // "Today" counts: tasks completed today (regardless of when added)
+      // PLUS unfinished tasks that are due today or overdue (so they show up before being done)
+      const todayTasks = tasks.filter((t) => {
+        if (t.status === "done") return isToday(t.completedAt);
+        return isToday(t.dueDate) || isOverdue(t);
+      });
+      const todayDone = todayTasks.filter((t) => t.status === "done").length;
+      const todayTotal = todayTasks.length;
+      const todayPct = todayTotal === 0 ? 0 : Math.round((todayDone / todayTotal) * 100);
+
+      const weekDone = tasks.filter((t) => {
+        if (t.status !== "done" || !t.completedAt) return false;
+        const c = new Date(t.completedAt);
+        const wkAgo = new Date(); wkAgo.setDate(wkAgo.getDate() - 7);
+        return c > wkAgo;
+      }).length;
+
+      const totalMinsTracked = tasks.reduce((s, t) => {
+        let m = t.actualMinutes || 0;
+        if (t.status === "doing" && t.startedAt) {
+          m += (Date.now() - new Date(t.startedAt).getTime()) / 60000;
+        }
+        return s + m;
+      }, 0);
+
+      const dateLine = new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
+
+      return (
+        <div className="almanac min-h-screen w-full relative" style={{ background: "#F4EEE2", color: "#1A1612" }}>
+          <div className="grain absolute inset-0 pointer-events-none opacity-60" />
+
+          <div className="relative max-w-3xl mx-auto px-6 py-8 sm:px-10 sm:py-14">
+
+            {/* iOS install prompt */}
+            {showIOSInstall && (
+              <div className="slide-down mb-6 border-l-2 border-[#1A1612] pl-4 py-3 bg-[#1A1612]/5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1">
+                    <p className="mono uppercase text-[10px] tracking-[0.25em] text-stone-700/80 mb-1">
+                      Install on your iPhone
+                    </p>
+                    <p className="text-sm leading-relaxed">
+                      Tap <Icon name="share" size={14} className="inline mb-0.5" /> Share, then <span className="font-semibold">Add to Home Screen</span>. Required for notifications and proper full-screen feel.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => { localStorage.setItem(INSTALL_DISMISSED_KEY, "1"); setShowIOSInstall(false); }}
+                    className="text-stone-700 hover:text-stone-900 -mt-1"
+                  >
+                    <Icon name="x" size={16} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Missed reminders banner */}
+            {missedReminders.length > 0 && (
+              <div className="slide-down mb-6 border-l-2 border-[#C84B31] pl-4 py-2 bg-[#C84B31]/5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="mono uppercase text-[10px] tracking-[0.25em] text-[#C84B31] mb-1">
+                      While you were away
+                    </p>
+                    <p className="display italic text-lg">
+                      {missedReminders.length} reminder{missedReminders.length > 1 ? "s" : ""} due since you last opened this.
+                    </p>
+                    <ul className="mt-2 space-y-1">
+                      {missedReminders.map((t) => (
+                        <li key={t.id} className="text-sm text-stone-800">
+                          · {t.title} <span className="mono text-[10px] text-stone-700/60 ml-2">{fmtDateTime(t.dueDate)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <button onClick={() => setMissedReminders([])} className="text-stone-700 hover:text-stone-900">
+                    <Icon name="x" size={16} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Header */}
+            <header className="border-b border-stone-800/20 pb-6 mb-8">
+              <p className="mono uppercase text-[10px] tracking-[0.25em] text-stone-700/70 mb-2">{dateLine}</p>
+              <h1 className="display text-5xl sm:text-6xl leading-[0.95] italic">The Almanac</h1>
+              <p className="display text-xl mt-1 text-stone-700/80"><span className="not-italic">— a record of your days</span></p>
+              {notifPermission !== "granted" && isInStandaloneMode() && (
+                <button
+                  onClick={requestNotifPermission}
+                  className="mt-4 mono uppercase text-[10px] tracking-[0.2em] text-stone-700 hover:text-[#C84B31] flex items-center gap-1.5"
+                >
+                  <Icon name="bell" size={11} /> Enable notifications
+                </button>
+              )}
+            </header>
+
+            {/* Stats */}
+            <section className="grid grid-cols-3 gap-4 sm:gap-6 mb-10">
+              <Stat label="Today" value={`${todayDone}/${todayTotal}`} sub={`${todayPct}% complete`} pct={todayPct} />
+              <Stat label="This week" value={weekDone} sub="tasks finished" />
+              <Stat label="Time logged" value={fmtDuration(totalMinsTracked)} sub="across all" />
+            </section>
+
+            <QuickAdd onAdd={(t) => upsertTask(t)} />
+
+            <nav className="flex flex-wrap gap-x-5 gap-y-2 border-b border-stone-800/20 pb-3 mb-6 mt-8 overflow-x-auto">
+              {[["today","Today"],["upcoming","Upcoming"],["overdue","Overdue"],["all","All"],["done","Archive"]].map(([k, label]) => {
+                const count =
+                  k === "today" ? todayTasks.length :
+                  k === "upcoming" ? tasks.filter((t) => t.status !== "done" && t.dueDate && new Date(t.dueDate) > new Date()).length :
+                  k === "overdue" ? tasks.filter(isOverdue).length :
+                  k === "done" ? tasks.filter((t) => t.status === "done").length :
+                  tasks.length;
+                const active = filter === k;
+                return (
+                  <button key={k} onClick={() => setFilter(k)}
+                    className={`mono uppercase text-[11px] tracking-[0.2em] pb-1 whitespace-nowrap transition-colors ${active ? "text-[#C84B31] border-b-2 border-[#C84B31]" : "text-stone-700/70"}`}>
+                    {label} <span className="opacity-50">({count})</span>
+                  </button>
+                );
+              })}
+            </nav>
+
+            <main>
+              {filtered.length === 0 ? (
+                <div className="py-20 text-center">
+                  <p className="display italic text-3xl text-stone-700/60">
+                    {filter === "today" ? "Your day is open." : filter === "done" ? "Nothing archived yet." : "No entries here."}
+                  </p>
+                  <p className="mono text-[11px] uppercase tracking-[0.2em] text-stone-700/50 mt-3">
+                    {filter === "today" ? "Add a task above to begin" : "Try another view"}
+                  </p>
+                </div>
+              ) : (
+                <ul className="space-y-0">
+                  {filtered.map((t) => (
+                    <TaskRow key={t.id} task={t} tick={tick} onToggle={toggleStatus} onEdit={() => setEditing(t)} onDelete={() => removeTask(t.id)} />
+                  ))}
+                </ul>
+              )}
+            </main>
+
+            <footer className="mt-16 pt-6 border-t border-stone-800/20">
+              <p className="mono text-[10px] uppercase tracking-[0.25em] text-stone-700/50">
+                Saved on this device · {tasks.length} {tasks.length === 1 ? "entry" : "entries"}
+              </p>
+            </footer>
+          </div>
+
+          {editing && (
+            <TaskEditor
+              task={editing === "new" ? null : editing}
+              onSave={(t) => { upsertTask(t); setEditing(null); }}
+              onClose={() => setEditing(null)}
+              onDelete={(id) => { removeTask(id); setEditing(null); }}
+            />
+          )}
+        </div>
+      );
+    }
+
+    function Stat({ label, value, sub, pct }) {
+      return (
+        <div>
+          <p className="mono uppercase text-[10px] tracking-[0.2em] text-stone-700/60 mb-2">{label}</p>
+          <p className="display text-3xl sm:text-4xl leading-none mb-1">{value}</p>
+          <p className="text-xs text-stone-700/70">{sub}</p>
+          {pct != null && (
+            <div className="mt-2 h-[2px] bg-stone-800/15 relative overflow-hidden">
+              <div className="absolute left-0 top-0 h-full bg-[#C84B31] transition-all duration-500" style={{ width: `${pct}%` }} />
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function QuickAdd({ onAdd }) {
+      const [title, setTitle] = useState("");
+      const submit = (e) => {
+        e.preventDefault();
+        if (!title.trim()) return;
+        onAdd({
+          id: uid(), title: title.trim(), notes: "", status: "todo",
+          priority: "medium", dueDate: null, estimatedMinutes: null,
+          actualMinutes: 0, reminderSet: false, remindMinutesBefore: 15,
+          createdAt: nowISO(), completedAt: null, startedAt: null, tags: [],
+        });
+        setTitle("");
+      };
+      return (
+        <form onSubmit={submit} className="flex items-center gap-3 border-b-2 border-stone-800/30 pb-2">
+          <span className="display italic text-2xl text-stone-700/50 select-none">§</span>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Write down a task…"
+            className="flex-1 bg-transparent outline-none text-lg display italic placeholder:text-stone-700/40 min-w-0"
+          />
+          <button type="submit" disabled={!title.trim()}
+            className="mono uppercase text-[10px] tracking-[0.25em] text-[#C84B31] disabled:text-stone-700/30 flex items-center gap-1 whitespace-nowrap">
+            <Icon name="plus" size={12} /> Inscribe
+          </button>
+        </form>
+      );
+    }
+
+    function PriorityMark({ priority }) {
+      const colors = { high: "#C84B31", medium: "#8B7355", low: "#A8A29E" };
+      return <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: colors[priority] || colors.medium }} />;
+    }
+
+    function TaskRow({ task, tick, onToggle, onEdit, onDelete }) {
+      const overdue = isOverdue(task);
+      const doing = task.status === "doing";
+      const done = task.status === "done";
+
+      let liveMins = task.actualMinutes || 0;
+      if (doing && task.startedAt) {
+        liveMins += (Date.now() - new Date(task.startedAt).getTime()) / 60000;
+      }
+
+      return (
+        <li className="border-b border-stone-800/10 py-4 flex items-start gap-3 sm:gap-4">
+          <button
+            onClick={() => onToggle(task, done ? "todo" : "done")}
+            className={`mt-1 w-6 h-6 sm:w-5 sm:h-5 border flex-shrink-0 flex items-center justify-center transition-all ${done ? "bg-[#1A1612] border-[#1A1612]" : "border-stone-800/40"}`}
+            aria-label={done ? "Mark incomplete" : "Mark complete"}
+          >
+            {done && (
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                <path className="check-anim" d="M2 6.5 L5 9 L10 3" stroke="#F4EEE2" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            )}
+          </button>
+
+          <div className="flex-1 min-w-0" onClick={onEdit}>
+            <div className="flex items-start gap-2">
+              <span className="mt-1.5 flex-shrink-0"><PriorityMark priority={task.priority} /></span>
+              <h3 className={`flex-1 text-[17px] leading-snug ${done ? "line-through text-stone-700/40" : "text-stone-900"}`}>
+                {task.title}
+              </h3>
+            </div>
+
+            {task.notes && (
+              <p className={`mt-1 text-sm leading-relaxed text-stone-700/70 ${done ? "line-through opacity-60" : ""}`}>
+                {task.notes}
+              </p>
+            )}
+
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 mono text-[10px] uppercase tracking-[0.15em] text-stone-700/60">
+              {task.dueDate && (
+                <span className={`flex items-center gap-1 ${overdue ? "text-[#C84B31]" : ""}`}>
+                  <Icon name="calendar" size={10} />
+                  {fmtDateTime(task.dueDate)}
+                  {overdue && <Icon name="alert" size={10} />}
+                </span>
+              )}
+              {task.estimatedMinutes && (
+                <span className="flex items-center gap-1">
+                  <Icon name="clock" size={10} />
+                  est. {fmtDuration(task.estimatedMinutes)}
+                </span>
+              )}
+              {(liveMins > 0.1 || doing) && (
+                <span className={`flex items-center gap-1 ${doing ? "text-[#C84B31]" : ""}`}>
+                  {doing && <span className="w-1.5 h-1.5 bg-[#C84B31] rounded-full pulse-dot" />}
+                  {fmtDuration(liveMins)} {doing ? "running" : "logged"}
+                </span>
+              )}
+              {task.reminderSet && task.dueDate && (
+                <span className="flex items-center gap-1">
+                  <Icon name="bell" size={10} />
+                  {task.remindMinutesBefore}m before
+                </span>
+              )}
+            </div>
+
+            {task.estimatedMinutes && liveMins > 0 && !done && (
+              <div className="mt-2 h-[1px] bg-stone-800/10 relative overflow-hidden max-w-xs">
+                <div className="absolute left-0 top-0 h-full bg-[#C84B31]/60"
+                     style={{ width: `${Math.min(100, (liveMins / task.estimatedMinutes) * 100)}%` }} />
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-0.5 flex-shrink-0">
+            {!done && (
+              <button onClick={(e) => { e.stopPropagation(); onToggle(task, doing ? "todo" : "doing"); }}
+                className="p-2 text-stone-700" title={doing ? "Pause" : "Start"}>
+                <Icon name={doing ? "pause" : "play"} size={14} />
+              </button>
+            )}
+            <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
+              className="p-2 text-stone-700" title="Delete">
+              <Icon name="trash" size={14} />
+            </button>
+          </div>
+        </li>
+      );
+    }
+
+    function TaskEditor({ task, onSave, onClose, onDelete }) {
+      const [draft, setDraft] = useState(task || {
+        id: uid(), title: "", notes: "", status: "todo",
+        priority: "medium", dueDate: null, estimatedMinutes: null,
+        actualMinutes: 0, reminderSet: false, remindMinutesBefore: 15,
+        createdAt: nowISO(), completedAt: null, startedAt: null, tags: [],
+      });
+
+      const update = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
+      const save = () => { if (!draft.title.trim()) return; onSave({ ...draft, title: draft.title.trim() }); };
+
+      const dtLocalValue = draft.dueDate
+        ? new Date(new Date(draft.dueDate).getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+        : "";
+
+      return (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4"
+             style={{ background: "rgba(26,22,18,0.4)" }} onClick={onClose}>
+          <div className="w-full max-w-lg p-6 sm:p-8 relative max-h-[90vh] overflow-y-auto"
+               style={{ background: "#F4EEE2", boxShadow: "0 -10px 40px rgba(26,22,18,0.4)" }}
+               onClick={(e) => e.stopPropagation()}>
+            <div className="grain absolute inset-0 pointer-events-none opacity-50" />
+            <div className="relative">
+              <div className="flex items-start justify-between mb-6">
+                <div>
+                  <p className="mono uppercase text-[10px] tracking-[0.25em] text-stone-700/60 mb-1">
+                    {task ? "Edit entry" : "New entry"}
+                  </p>
+                  <h2 className="display italic text-3xl">A task, in detail.</h2>
+                </div>
+                <button onClick={onClose} className="text-stone-700 -mr-2 -mt-1 p-1"><Icon name="x" size={20} /></button>
+              </div>
+
+              <div className="space-y-5">
+                <div>
+                  <label className="mono uppercase text-[10px] tracking-[0.2em] text-stone-700/70 block mb-1.5">Title</label>
+                  <input value={draft.title} onChange={(e) => update("title", e.target.value)} autoFocus
+                    className="w-full bg-transparent border-b border-stone-800/30 pb-1 text-lg display italic outline-none focus:border-[#C84B31]"
+                    placeholder="What needs doing?" />
+                </div>
+
+                <div>
+                  <label className="mono uppercase text-[10px] tracking-[0.2em] text-stone-700/70 block mb-1.5">Notes</label>
+                  <textarea value={draft.notes} onChange={(e) => update("notes", e.target.value)} rows={2}
+                    className="w-full bg-transparent border-b border-stone-800/30 pb-1 outline-none focus:border-[#C84B31] resize-none text-sm"
+                    placeholder="Optional details…" />
+                </div>
+
+                <div className="grid grid-cols-2 gap-5">
+                  <div>
+                    <label className="mono uppercase text-[10px] tracking-[0.2em] text-stone-700/70 block mb-1.5">Due</label>
+                    <input type="datetime-local" value={dtLocalValue}
+                      onChange={(e) => update("dueDate", e.target.value ? new Date(e.target.value).toISOString() : null)}
+                      className="w-full bg-transparent border-b border-stone-800/30 pb-1 outline-none focus:border-[#C84B31] text-sm mono" />
+                  </div>
+                  <div>
+                    <label className="mono uppercase text-[10px] tracking-[0.2em] text-stone-700/70 block mb-1.5">Estimated</label>
+                    <select value={draft.estimatedMinutes || ""}
+                      onChange={(e) => update("estimatedMinutes", e.target.value ? parseInt(e.target.value) : null)}
+                      className="w-full bg-transparent border-b border-stone-800/30 pb-1 outline-none focus:border-[#C84B31] text-sm mono">
+                      <option value="">—</option>
+                      <option value="5">5 min</option>
+                      <option value="15">15 min</option>
+                      <option value="30">30 min</option>
+                      <option value="60">1 hr</option>
+                      <option value="120">2 hr</option>
+                      <option value="240">4 hr</option>
+                      <option value="480">8 hr</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mono uppercase text-[10px] tracking-[0.2em] text-stone-700/70 block mb-2">Priority</label>
+                  <div className="flex gap-2">
+                    {[["low","Low"],["medium","Medium"],["high","High"]].map(([k, label]) => (
+                      <button key={k} onClick={() => update("priority", k)}
+                        className={`flex items-center gap-1.5 px-3 py-2 text-xs mono uppercase tracking-[0.15em] border transition-colors ${draft.priority === k ? "border-[#1A1612] bg-[#1A1612] text-[#F4EEE2]" : "border-stone-800/30 text-stone-700"}`}>
+                        <PriorityMark priority={k} />{label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {draft.dueDate && (
+                  <div>
+                    <label className="mono uppercase text-[10px] tracking-[0.2em] text-stone-700/70 block mb-2">Reminder</label>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <button onClick={() => update("reminderSet", !draft.reminderSet)}
+                        className={`flex items-center gap-1.5 px-3 py-2 text-xs mono uppercase tracking-[0.15em] border transition-colors ${draft.reminderSet ? "border-[#C84B31] bg-[#C84B31] text-[#F4EEE2]" : "border-stone-800/30 text-stone-700"}`}>
+                        <Icon name={draft.reminderSet ? "bell" : "bellOff"} size={12} />
+                        {draft.reminderSet ? "On" : "Off"}
+                      </button>
+                      {draft.reminderSet && (
+                        <select value={draft.remindMinutesBefore || 15}
+                          onChange={(e) => update("remindMinutesBefore", parseInt(e.target.value))}
+                          className="bg-transparent border-b border-stone-800/30 pb-1 outline-none focus:border-[#C84B31] text-xs mono">
+                          <option value="5">5 min before</option>
+                          <option value="15">15 min before</option>
+                          <option value="30">30 min before</option>
+                          <option value="60">1 hr before</option>
+                          <option value="1440">1 day before</option>
+                        </select>
+                      )}
+                    </div>
+                    <p className="mono text-[10px] text-stone-700/50 mt-2 leading-relaxed">
+                      Reminders fire when the app is open. If you missed any, they'll be summarized at the top of the screen next time you open the app.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between mt-7 pt-5 border-t border-stone-800/15">
+                {task ? (
+                  <button onClick={() => onDelete(task.id)}
+                    className="mono uppercase text-[10px] tracking-[0.25em] text-stone-700 flex items-center gap-1">
+                    <Icon name="trash" size={11} /> Delete
+                  </button>
+                ) : <span />}
+                <div className="flex gap-3">
+                  <button onClick={onClose} className="mono uppercase text-[10px] tracking-[0.25em] text-stone-700">Cancel</button>
+                  <button onClick={save} disabled={!draft.title.trim()}
+                    className="mono uppercase text-[10px] tracking-[0.25em] px-4 py-2 bg-[#1A1612] text-[#F4EEE2] disabled:opacity-30">
+                    Save entry
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ---------- Service worker ----------
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('service-worker.js').catch((e) => console.log('SW reg failed:', e));
+      });
+    }
+
+    // ---------- Mount ----------
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
