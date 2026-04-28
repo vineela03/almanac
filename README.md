@@ -1,4 +1,4 @@
-# The Almanac — Setup Guide
+# The Almanac — Setup Guide (Built using Claude)
 
 A personal task app for your iPhone (and laptop). Hosted free on GitHub Pages.
 
@@ -82,7 +82,7 @@ iOS is strict about background activity, so here's the honest layout:
 
 ## Updating the app later
 
-If you want changes (new features, different colors, bug fixes), come back to me in Claude — I'll give you new files. Then in your GitHub repo:
+If you want changes (new features, different colors, bug fixes):
 
 1. Click the file you want to replace (e.g. `index.html`)
 2. Click the pencil icon → delete its contents → paste the new contents → **Commit changes**
